@@ -66,8 +66,31 @@ app.post('/webhooks/paypal', wrap(async (req, res) => {
     const o = orderId && db.prepare('SELECT status FROM orders WHERE id=?').get(orderId);
     if (o && o.status === 'paid') runAgent(orderId);
   }
+  // Payout batch finished (or was denied): refresh the supplier payment status.
+  if (seen.changes && ev.event_type?.startsWith('PAYMENT.PAYOUTSBATCH.')) {
+    const batch = ev.resource?.batch_header;
+    if (batch?.payout_batch_id) {
+      db.prepare('UPDATE purchases SET payout_status=? WHERE payout_batch_id=?')
+        .run(String(batch.batch_status || ev.event_type.split('.').pop()).toLowerCase(), batch.payout_batch_id);
+    }
+  }
   res.json({ ok: true });
 }));
+
+// Poll PayPal for supplier payouts still pending (also covers missed webhooks).
+async function refreshPayouts() {
+  const rows = db.prepare("SELECT order_id, payout_batch_id FROM purchases WHERE payout_status IN ('pending','processing','paying') AND payout_batch_id IS NOT NULL").all();
+  for (const r of rows) {
+    try {
+      const p = await paypal.getPayout(r.payout_batch_id);
+      const s = String(p.batch_header?.batch_status || '').toLowerCase();
+      if (s) db.prepare('UPDATE purchases SET payout_status=? WHERE order_id=?').run(s, r.order_id);
+    } catch (e) {
+      console.error('payout refresh', r.payout_batch_id, e.message);
+    }
+  }
+}
+setInterval(() => refreshPayouts().catch(() => {}), 30_000).unref();
 
 // ---------- supplier "APIs" (demo feeds) ----------
 app.get('/suppliers/:id/feed', (req, res) => {
