@@ -1,0 +1,19 @@
+{
+  "name": "restockguard",
+  "version": "0.1.0",
+  "description": "An AI restock agent for small online stores: buys from the best supplier the moment a customer pays, and never buys at a loss. Built on PayPal.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ag-grid-community": "^35.3.1",
+    "express": "4.21.2"
+  }
+}

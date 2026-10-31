@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RestockGuard dashboard</title>
+<link rel="stylesheet" href="style.css">
+<script src="/vendor/ag-grid.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="logo">Restock<span>Guard</span></div>
+  <span class="badge" id="mode"></span>
+  <span class="badge" id="ai"></span>
+  <div class="spacer"></div>
+  <input id="token" placeholder="owner token" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;width:150px" title="Needed for approvals, rules and demo knobs when the server sets ADMIN_TOKEN">
+  <a href="/">Store →</a>
+</header>
+<main>
+  <div class="kpis">
+    <div class="kpi"><div class="label">Sales (fulfilled)</div><div class="value" id="k-sales">$0</div></div>
+    <div class="kpi"><div class="label">Supplier cost</div><div class="value" id="k-cost">$0</div></div>
+    <div class="kpi ok"><div class="label">Profit</div><div class="value" id="k-profit">$0</div></div>
+    <div class="kpi"><div class="label">Spent today / budget</div><div class="value" id="k-spent">$0</div></div>
+    <div class="kpi hold"><div class="label">Waiting for you</div><div class="value" id="k-held">0</div></div>
+    <div class="kpi block"><div class="label">Blocked (would lose money)</div><div class="value" id="k-blocked">0</div></div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button data-p="orders" class="on">Orders</button>
+    <button data-p="approvals">Approvals <span class="count" id="ap-count" hidden></span></button>
+    <button data-p="suppliers">Suppliers</button>
+    <button data-p="rules">Rules</button>
+  </div>
+
+  <section class="panel on" id="p-orders">
+    <div class="split">
+      <div class="box"><div id="g-orders" class="grid"></div></div>
+      <div class="box" id="detail"><div class="empty">Select an order to see what the agent compared and why it decided.</div></div>
+    </div>
+  </section>
+
+  <section class="panel" id="p-approvals">
+    <div class="box"><div id="g-approvals" class="grid" style="height:300px"></div>
+      <p class="muted">Approving re-checks the supplier price first. An offer that no longer keeps your margin is never paid.</p></div>
+  </section>
+
+  <section class="panel" id="p-suppliers">
+    <div class="box">
+      <h3>Supplier feeds <span class="muted">(demo: edit a cost to simulate a supplier price change)</span></h3>
+      <div id="g-suppliers" class="grid"></div>
+      <p><button id="reset">Reset supplier prices</button></p>
+    </div>
+  </section>
+
+  <section class="panel" id="p-rules">
+    <div class="split">
+      <div class="box">
+        <h3>Purchasing rules</h3>
+        <p class="muted">Checked in code before any money moves. The AI never overrides them.</p>
+        <div class="form" id="rules"></div>
+        <p><button class="primary" id="save">Save rules</button></p>
+      </div>
+      <div class="box">
+        <h3>Change a rule in plain words</h3>
+        <textarea id="nl" placeholder="e.g. Keep at least 25% margin and ask me before anything over $80."></textarea>
+        <p><button id="preview">Preview</button> <button class="primary" id="apply" disabled>Apply</button></p>
+        <pre id="nl-out" class="muted" style="white-space:pre-wrap"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+<script type="module">
+const { createGrid, ModuleRegistry, AllCommunityModule, themeQuartz } = window.agGrid;
+if (ModuleRegistry && AllCommunityModule) ModuleRegistry.registerModules([AllCommunityModule]);
+const theme = themeQuartz.withParams({ accentColor: '#0b5d4b', fontSize: 13, headerFontWeight: 600 });
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const usd = (n) => (n == null ? '' : `$${Number(n).toFixed(2)}`);
+const tokenBox = $('token');
+try { tokenBox.value = localStorage.getItem('rg-token') || ''; } catch {}
+tokenBox.onchange = () => { try { localStorage.setItem('rg-token', tokenBox.value); } catch {} };
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-token': tokenBox.value }, body: JSON.stringify(body || {}) })
+  .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
+
+const cfg = await (await fetch('/api/config')).json();
+$('mode').textContent = cfg.mock ? 'PayPal mock' : 'PayPal sandbox';
+$('ai').textContent = cfg.ai ? 'AI matching on' : 'AI off (heuristics)';
+$('ai').className = 'badge' + (cfg.ai ? ' live' : '');
+
+// tabs
+document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => show(b.dataset.p));
+function show(p) {
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x.dataset.p === p));
+  document.querySelectorAll('.panel').forEach((x) => x.classList.toggle('on', x.id === `p-${p}`));
+}
+
+const status = (p) => `<span class="pill ${p.value}">${p.value}</span>`;
+const short = (id) => id.slice(-8);
+
+// orders grid
+let selected = null;
+let selectedStatus = null;
+const ordersGrid = createGrid($('g-orders'), {
+  theme, rowSelection: { mode: 'singleRow', checkboxes: false, enableClickSelection: true },
+  getRowId: (p) => p.data.id,
+  columnDefs: [
+    { field: 'created_at', headerName: 'Time', width: 68, valueFormatter: (p) => new Date(p.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) },
+    { field: 'sku', headerName: 'Product', width: 112, valueGetter: (p) => `${p.data.sku} ×${p.data.qty}` },
+    { field: 'sale_total', headerName: 'Sale', width: 82, valueFormatter: (p) => usd(p.value) },
+    { field: 'supplier', headerName: 'From', width: 66 },
+    { field: 'cost', headerName: 'Cost', width: 82, valueFormatter: (p) => usd(p.value) },
+    { headerName: 'Margin', width: 78, valueGetter: (p) => (p.data.cost ? ((p.data.sale_total - p.data.cost) / p.data.sale_total) * 100 : null), valueFormatter: (p) => (p.value == null ? '' : `${p.value.toFixed(0)}%`) },
+    { field: 'status', headerName: 'Status', flex: 1, minWidth: 100, cellRenderer: status },
+  ],
+  onRowClicked: (e) => openOrder(e.data.id),
+});
+
+async function openOrder(id) {
+  selected = id;
+  const d = await (await fetch(`/api/orders/${id}`)).json();
+  selectedStatus = d.order.status;
+  const last = [...d.decisions].reverse().find((x) => x.explanation) || d.decisions.at(-1);
+  const checks = [...d.decisions].reverse().find((x) => x.checks?.length)?.checks || [];
+  $('detail').innerHTML = `
+    <h3>Order …${esc(short(id))} · ${esc(d.order.sku)} × ${d.order.qty} · ${usd(d.order.sale_total)} <span class="pill ${esc(d.order.status)}">${esc(d.order.status)}</span></h3>
+    ${last ? `<div class="explain">${esc(last.explanation || last.reason)}</div>` : '<p class="muted">The agent is working…</p>'}
+    ${d.purchase ? `<p class="muted">Paid ${esc(d.purchase.supplier)} ${usd(d.purchase.amount)} by PayPal Payouts · batch ${esc(d.purchase.payout_batch_id || '')} (${esc(d.purchase.payout_status)}) · tracking ${esc(d.purchase.tracking || '-')}</p>` : ''}
+    <h3 style="margin-top:14px">Offers compared</h3>
+    <div id="g-quotes" style="height:210px"></div>
+    ${checks.length ? `<h3 style="margin-top:14px">Rule checks</h3><table class="checks">${checks.map((c) => `<tr><td>${c.pass ? '✅' : '⚠️'}</td><td>${esc(c.name)}</td><td>${esc(c.detail)}</td></tr>`).join('')}</table>` : ''}
+    <ul class="timeline">${d.decisions.map((x) => `<li><b>${esc(x.action)}</b>${esc(x.reason)}</li>`).join('')}</ul>`;
+  createGrid($('g-quotes'), {
+    theme, rowData: d.quotes,
+    columnDefs: [
+      { field: 'rank', headerName: '#', width: 50 },
+      { field: 'supplier', headerName: 'From', width: 66 },
+      { field: 'item_name', headerName: 'Their listing', flex: 1, minWidth: 160, tooltipField: 'match' },
+      { field: 'landed', headerName: 'Landed', width: 82, valueFormatter: (p) => usd(p.value) },
+      { field: 'eta_days', headerName: 'Days', width: 60 },
+      { field: 'match', headerName: 'Same product?', width: 140, tooltipField: 'match' },
+      { field: 'rejected_reason', headerName: 'Not used because', width: 160, tooltipField: 'rejected_reason' },
+    ],
+  });
+}
+
+// approvals grid
+const apGrid = createGrid($('g-approvals'), {
+  theme, getRowId: (p) => p.data.order_id,
+  columnDefs: [
+    { field: 'created_at', headerName: 'Since', width: 100, valueFormatter: (p) => new Date(p.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) },
+    { field: 'sku', headerName: 'Product', width: 110 },
+    { field: 'sale_total', headerName: 'Sale', width: 90, valueFormatter: (p) => usd(p.value) },
+    { field: 'supplier', width: 90 },
+    { field: 'amount', headerName: 'Would pay', width: 110, valueFormatter: (p) => usd(p.value) },
+    { field: 'reasons', headerName: 'Why it waits', flex: 1, wrapText: true, autoHeight: true, valueFormatter: (p) => JSON.parse(p.value || '[]').join('; ') },
+    { headerName: '', width: 190, cellRenderer: (p) => {
+      const el = document.createElement('span');
+      el.innerHTML = '<button class="primary">Approve</button> <button class="danger">Reject</button>';
+      const [ok, no] = el.querySelectorAll('button');
+      const act = (v) => async () => { ok.disabled = no.disabled = true; try { await post(`/api/approvals/${p.data.order_id}`, { approve: v }); } catch (e) { alert(e.message); } refresh(); };
+      ok.onclick = act(true); no.onclick = act(false);
+      return el;
+    } },
+  ],
+});
+
+// suppliers grid (editable cost = demo price change)
+const supGrid = createGrid($('g-suppliers'), {
+  theme,
+  columnDefs: [
+    { field: 'supplier_name', headerName: 'Supplier', width: 200 },
+    { field: 'id', headerName: 'Item', width: 90 },
+    { field: 'title', headerName: 'Listing', flex: 1, minWidth: 220 },
+    { field: 'gtin', headerName: 'GTIN', width: 140 },
+    { field: 'cost', headerName: 'Cost (edit me)', width: 130, editable: true, valueFormatter: (p) => usd(p.value), valueParser: (p) => Number(p.newValue), cellStyle: (p) => (p.data.cost > p.data.base_cost ? { color: '#b3261e', fontWeight: 600 } : null) },
+    { field: 'base_cost', headerName: 'Usual', width: 90, valueFormatter: (p) => usd(p.value) },
+    { field: 'shipping', width: 95, valueFormatter: (p) => usd(p.value) },
+    { field: 'eta', headerName: 'Days', width: 70 },
+    { field: 'stock', width: 80 },
+  ],
+  onCellValueChanged: async (e) => {
+    try { await post('/api/demo/price', { supplier: e.data.supplier, item: e.data.id, cost: e.newValue }); } catch (err) { alert(err.message); }
+    loadSuppliers();
+  },
+});
+async function loadSuppliers() {
+  const s = await (await fetch('/api/suppliers')).json();
+  supGrid.setGridOption('rowData', s.flatMap((f) => f.items.map((it) => ({ ...it, supplier: f.id, supplier_name: f.name }))));
+}
+$('reset').onclick = async () => { try { await post('/api/demo/reset'); } catch (e) { alert(e.message); } loadSuppliers(); };
+
+// rules
+const LABELS = {
+  min_margin_pct: 'Minimum margin (%)', max_order_usd: 'Ask me above ($ per order)', daily_budget_usd: 'Daily supplier budget ($)',
+  max_price_jump_pct: 'Ask me if a supplier raises its price by more than (%)', new_supplier_days: 'Ask me for suppliers younger than (days)', max_eta_days: 'Ignore offers slower than (days)',
+};
+function renderRules(p) {
+  $('rules').innerHTML = Object.entries(LABELS).map(([k, l]) => `<label for="r-${k}">${l}</label><input id="r-${k}" type="number" value="${p[k]}">`).join('')
+    + `<label for="r-blocked">Blocked suppliers (A, B, C)</label><input id="r-blocked" value="${esc(p.blocked_suppliers.join(','))}">`;
+}
+$('save').onclick = async () => {
+  const p = Object.fromEntries(Object.keys(LABELS).map((k) => [k, Number($(`r-${k}`).value)]));
+  p.blocked_suppliers = $('r-blocked').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+  try { renderRules(await post('/api/policy', p)); } catch (e) { alert(e.message); }
+};
+let proposed = null;
+$('preview').onclick = async () => {
+  $('nl-out').textContent = 'Thinking…';
+  try { proposed = (await post('/api/policy/text', { text: $('nl').value })).proposed; $('nl-out').textContent = JSON.stringify(proposed, null, 2); $('apply').disabled = false; }
+  catch (e) { $('nl-out').textContent = e.message; }
+};
+$('apply').onclick = async () => {
+  try { renderRules(await post('/api/policy', proposed)); $('nl-out').textContent = 'Saved.'; $('apply').disabled = true; } catch (e) { alert(e.message); }
+};
+
+// refresh loop
+let rulesShown = false;
+async function refresh() {
+  const d = await (await fetch('/api/dashboard')).json();
+  const s = d.summary;
+  $('k-sales').textContent = usd(s.sales); $('k-cost').textContent = usd(s.cost); $('k-profit').textContent = usd(s.profit);
+  $('k-spent').textContent = `${usd(s.spent_today)} / $${d.policy.daily_budget_usd}`;
+  $('k-held').textContent = s.held; $('k-blocked').textContent = s.blocked;
+  ordersGrid.setGridOption('rowData', d.orders);
+  apGrid.setGridOption('rowData', d.approvals);
+  $('ap-count').hidden = !d.approvals.length; $('ap-count').textContent = d.approvals.length;
+  if (!rulesShown) { renderRules(d.policy); rulesShown = true; }
+  const cur = selected && d.orders.find((o) => o.id === selected);
+  if (cur && cur.status !== selectedStatus) openOrder(selected);
+}
+await refresh();
+await loadSuppliers();
+const m = location.hash.match(/order=([\w-]+)/);
+if (m) openOrder(m[1]);
+if (location.hash === '#approvals') show('approvals');
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

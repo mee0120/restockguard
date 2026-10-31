@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nook &amp; Kettle (demo store)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="logo">Nook <span>&amp;</span> Kettle</div>
+  <span class="badge" id="mode">PayPal sandbox</span>
+  <div class="spacer"></div>
+  <a href="dashboard.html">Owner dashboard (RestockGuard) →</a>
+</header>
+<main>
+  <div class="note">
+    Demo store for <b>RestockGuard</b>. Payments run in the PayPal sandbox: pay with the sandbox buyer account, no real money moves.
+    This store keeps no stock: when you pay, RestockGuard buys the item from the best supplier and ships it to you.
+  </div>
+  <div class="products" id="products"></div>
+</main>
+<script type="module">
+const cfg = await (await fetch('/api/config')).json();
+const products = await (await fetch('/api/products')).json();
+document.getElementById('mode').textContent = cfg.mock ? 'PayPal mock mode' : 'PayPal sandbox';
+
+if (!cfg.mock) {
+  await new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(cfg.clientId)}&currency=USD&intent=capture`;
+    s.onload = ok; s.onerror = fail;
+    document.head.appendChild(s);
+  });
+}
+
+const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+  .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
+
+function done(card, orderId) {
+  const box = card.querySelector('.pay');
+  box.innerHTML = `<div class="paid">Paid. RestockGuard is sourcing your order now.<br>
+    <a href="dashboard.html#order=${orderId}">See what the agent decided →</a></div>`;
+}
+
+const root = document.getElementById('products');
+for (const p of products) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="art">${p.image}</div>
+    <h3>${p.name}</h3>
+    <div class="price">$${p.price.toFixed(2)}</div>
+    <div class="row">Qty <select>${[1, 2, 3].map((n) => `<option>${n}</option>`).join('')}</select> · ships from our suppliers</div>
+    <div class="pay"></div>`;
+  root.appendChild(card);
+  const qty = () => Number(card.querySelector('select').value);
+  const pay = card.querySelector('.pay');
+
+  if (cfg.mock) {
+    const b = document.createElement('button');
+    b.className = 'primary';
+    b.textContent = 'Pay with PayPal (mock)';
+    b.onclick = async () => {
+      b.disabled = true;
+      const { id } = await post('/api/orders', { sku: p.sku, qty: qty() });
+      await post(`/api/orders/${id}/capture`);
+      done(card, id);
+    };
+    pay.appendChild(b);
+  } else {
+    window.paypal.Buttons({
+      style: { layout: 'horizontal', tagline: false, height: 40 },
+      createOrder: async () => (await post('/api/orders', { sku: p.sku, qty: qty() })).id,
+      onApprove: async (data) => { await post(`/api/orders/${data.orderID}/capture`); done(card, data.orderID); },
+      onError: (err) => { pay.insertAdjacentHTML('beforeend', `<p class="muted">Payment failed: ${err}</p>`); },
+    }).render(pay);
+  }
+}
+</script>
+</body>
+</html>
