@@ -120,7 +120,7 @@ const ordersGrid = createGrid($('g-orders'), {
 async function openOrder(id) {
   selected = id;
   const d = await (await fetch(`/api/orders/${id}`)).json();
-  selectedStatus = d.order.status;
+  selectedStatus = `${d.order.status}|${d.purchase?.payout_status || ''}|${d.purchase?.tracking || ''}`;
   const last = [...d.decisions].reverse().find((x) => x.explanation) || d.decisions.at(-1);
   const checks = [...d.decisions].reverse().find((x) => x.checks?.length)?.checks || [];
   $('detail').innerHTML = `
@@ -228,7 +228,7 @@ async function refresh() {
   $('ap-count').hidden = !d.approvals.length; $('ap-count').textContent = d.approvals.length;
   if (!rulesShown) { renderRules(d.policy); rulesShown = true; }
   const cur = selected && d.orders.find((o) => o.id === selected);
-  if (cur && cur.status !== selectedStatus) openOrder(selected);
+  if (cur && `${cur.status}|${cur.payout_status || ''}|${cur.tracking || ''}` !== selectedStatus) openOrder(selected);
 }
 await refresh();
 await loadSuppliers();
