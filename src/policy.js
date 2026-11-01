@@ -64,7 +64,7 @@ export function evaluate({ saleTotal, offer, spentToday, policy, today = new Dat
 
   const ageDays = Math.floor((today - new Date(offer.supplier_since)) / 86_400_000);
   ok('supplier history', ageDays >= policy.new_supplier_days, `${ageDays} days (min ${policy.new_supplier_days})`);
-  if (ageDays < policy.new_supplier_days) hold.push(`${offer.supplier_name} is new (${ageDays} days)`);
+  if (ageDays < policy.new_supplier_days) hold.push(`${offer.supplier_name} is a new supplier (first listed ${ageDays} days ago)`);
 
   return { block, hold, checks, margin: m };
 }

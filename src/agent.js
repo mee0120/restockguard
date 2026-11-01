@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 import { now } from './db.js';
 import { PRODUCTS, SUPPLIER_IDS, supplierFeed, supplierPayee } from './catalog.js';
-import { matchItems, explain } from './llm.js';
+import { matchItems } from './llm.js';
 import { getPolicy, excludeReason, evaluate, marginPct } from './policy.js';
 import { paySupplier, addTracking } from './paypal.js';
 import { notifyOwner } from './notify.js';
@@ -83,7 +83,7 @@ export async function handlePaidOrder(db, orderId) {
     const reason = best
       ? `no offer keeps the ${policy.min_margin_pct}% margin (best: ${best.supplier_name} $${best.landed_total.toFixed(2)} vs sale $${order.sale_total.toFixed(2)}, margin ${best.margin.toFixed(1)}%)`
       : 'no supplier has this product in stock';
-    const text = await explain({ summary: `Not bought: ${reason}.`, product: product.name, sale: order.sale_total, offers: usable.slice(0, 3).map((o) => ({ supplier: o.supplier_name, landed: o.landed_total, eta: o.eta_days })) });
+    const text = `Not bought: ${reason}.`;
     logDecision(db, orderId, 'block', reason, text);
     setStatus(db, orderId, 'blocked');
     await notifyOwner(`⛔ RestockGuard blocked a purchase\n${product.name} (order ${orderId})\n${reason}\n${appUrl()}/dashboard.html`);
@@ -103,11 +103,9 @@ export async function handlePaidOrder(db, orderId) {
   ];
   const summary = `Chose ${pick.supplier_name}: $${pick.landed_total.toFixed(2)} landed, arrives in ${pick.eta_days} days, margin ${res.margin.toFixed(1)}%.`
     + (skipped.length ? ` Skipped cheaper: ${skipped.join(', ')}.` : '');
-  const explanation = await explain({
-    summary, product: product.name, sale: order.sale_total, chosen: { supplier: pick.supplier_name, landed: pick.landed_total, eta: pick.eta_days },
-    others: usable.filter((o) => o !== pick).slice(0, 3).map((o) => ({ supplier: o.supplier_name, landed: o.landed_total, eta: o.eta_days, margin: Math.round(o.margin) })),
-    holds: res.hold,
-  });
+  // The decision text is built in code from the checks, not written by the model:
+  // a reworded reason can be wrong even when every number in it is right.
+  const explanation = summary;
 
   if (res.hold.length) {
     db.prepare('INSERT OR REPLACE INTO approvals(order_id,supplier,amount,reasons,status,created_at) VALUES(?,?,?,?,?,?)')
