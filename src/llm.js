@@ -83,14 +83,24 @@ export async function matchItems(product, items) {
 }
 
 // ---------- explanation ----------
+const numbersIn = (s) => new Set((String(s).match(/\d+(?:\.\d+)?/g) || []).map((n) => String(Number(n))));
+
+/**
+ * Rewrite the code-made summary in plain words. The summary is the source of truth:
+ * if the model's text contains any number that is not in the facts, it is discarded
+ * and the summary is shown instead (no invented prices, days or margins).
+ */
 export async function explain(ctx) {
   const fallback = ctx.summary;
   if (!llmEnabled()) return fallback;
   try {
-    return await chat([
-      { role: 'system', content: 'Explain a purchasing decision to a small shop owner in 1-2 short sentences. Use only the facts given. No markdown.' },
-      { role: 'user', content: JSON.stringify(ctx) },
+    const text = await chat([
+      { role: 'system', content: 'Rewrite the SUMMARY for a small shop owner in 1-2 short sentences. Keep every reason exactly as stated in SUMMARY and do not add new reasons, numbers or facts. No markdown.' },
+      { role: 'user', content: `SUMMARY: ${ctx.summary}\n\nContext (for wording only): ${JSON.stringify({ ...ctx, summary: undefined })}` },
     ], { maxTokens: 200, json: false });
+    const allowed = numbersIn(JSON.stringify(ctx));
+    const invented = [...numbersIn(text)].filter((n) => !allowed.has(n));
+    return invented.length ? fallback : text;
   } catch {
     return fallback;
   }
