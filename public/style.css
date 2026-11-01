@@ -13,7 +13,7 @@ header.top .logo span { color: var(--brand); }
 header.top .spacer { flex: 1; }
 .badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: #eef1f4; color: var(--muted); }
 .badge.live { background: #e6f2ee; color: var(--brand); }
-main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+main { max-width: 1400px; margin: 0 auto; padding: 24px; }
 .note { background: #fff8e6; border: 1px solid #f1dfb0; border-radius: var(--radius); padding: 10px 14px; font-size: 14px; color: #6b5310; margin-bottom: 20px; }
 
 /* store */
@@ -64,3 +64,8 @@ button:disabled { opacity: .5; cursor: default; }
 textarea { width: 100%; min-height: 70px; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .muted { color: var(--muted); font-size: 13px; }
 .empty { color: var(--muted); padding: 30px; text-align: center; }
+
+.how { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+.how div { background: #eaf3ef; border-radius: 10px; padding: 8px 10px; font-size: 13px; color: #24433a; line-height: 1.35; }
+.how b { display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: var(--brand); color: #fff; text-align: center; font-size: 12px; line-height: 20px; margin-right: 6px; }
+@media (max-width: 900px) { .how { grid-template-columns: 1fr; } }

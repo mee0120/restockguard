@@ -84,6 +84,8 @@ export async function handlePaidOrder(db, orderId) {
       ? `no offer keeps the ${policy.min_margin_pct}% margin (best: ${best.supplier_name} $${best.landed_total.toFixed(2)} vs sale $${order.sale_total.toFixed(2)}, margin ${best.margin.toFixed(1)}%)`
       : 'no supplier has this product in stock';
     const text = `Not bought: ${reason}.`;
+    const mark = db.prepare('UPDATE quotes SET rejected_reason=? WHERE order_id=? AND supplier=? AND landed=? AND rejected_reason IS NULL');
+    for (const o of usable) mark.run(`margin ${o.margin.toFixed(1)}% < ${policy.min_margin_pct}%`, order.id, o.supplier, o.landed_total);
     logDecision(db, orderId, 'block', reason, text);
     setStatus(db, orderId, 'blocked');
     await notifyOwner(`⛔ RestockGuard blocked a purchase\n${product.name} (order ${orderId})\n${reason}\n${appUrl()}/dashboard.html`);
@@ -101,6 +103,17 @@ export async function handlePaidOrder(db, orderId) {
     ...evals.filter((e) => e.o !== pick && e.o.landed_total < pick.landed_total && e.r.hold.length)
       .map((e) => e.r.hold.join('; ')),
   ];
+  // Record, per offer, why it was or was not used (shown in the dashboard).
+  const note = db.prepare('UPDATE quotes SET rejected_reason=? WHERE order_id=? AND supplier=? AND landed=? AND rejected_reason IS NULL');
+  for (const o of usable) {
+    if (o === pick) note.run(clean ? 'CHOSEN' : 'CHOSEN (waits for owner)', order.id, o.supplier, o.landed_total);
+    else if (o.margin < policy.min_margin_pct) note.run(`margin ${o.margin.toFixed(1)}% < ${policy.min_margin_pct}%`, order.id, o.supplier, o.landed_total);
+    else {
+      const e = evals.find((x) => x.o === o);
+      if (e?.r.hold.length && o.landed_total < pick.landed_total) note.run(`needs owner: ${e.r.hold.join('; ')}`, order.id, o.supplier, o.landed_total);
+      else note.run('higher landed cost', order.id, o.supplier, o.landed_total);
+    }
+  }
   const summary = `Chose ${pick.supplier_name}: $${pick.landed_total.toFixed(2)} landed, arrives in ${pick.eta_days} days, margin ${res.margin.toFixed(1)}%.`
     + (skipped.length ? ` Skipped cheaper: ${skipped.join(', ')}.` : '');
   // The decision text is built in code from the checks, not written by the model:

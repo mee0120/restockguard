@@ -17,6 +17,13 @@
   <a href="/">Store →</a>
 </header>
 <main>
+  <div class="how">
+    <div><b>1</b> A customer pays with PayPal</div>
+    <div><b>2</b> AI finds the same product at each supplier</div>
+    <div><b>3</b> Rules in code: margin, limits, new suppliers</div>
+    <div><b>4</b> Pays the supplier by PayPal Payouts, or waits for you</div>
+    <div><b>5</b> Tracking goes back on the customer's PayPal order</div>
+  </div>
   <div class="kpis">
     <div class="kpi"><div class="label">Sales (fulfilled)</div><div class="value" id="k-sales">$0</div></div>
     <div class="kpi"><div class="label">Supplier cost</div><div class="value" id="k-cost">$0</div></div>
@@ -105,14 +112,15 @@ let selectedStatus = null;
 const ordersGrid = createGrid($('g-orders'), {
   theme, rowSelection: { mode: 'singleRow', checkboxes: false, enableClickSelection: true },
   getRowId: (p) => p.data.id,
+  defaultColDef: { suppressMovable: true },
   columnDefs: [
-    { field: 'created_at', headerName: 'Time', width: 68, valueFormatter: (p) => new Date(p.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) },
-    { field: 'sku', headerName: 'Product', width: 112, valueGetter: (p) => `${p.data.sku} ×${p.data.qty}` },
-    { field: 'sale_total', headerName: 'Sale', width: 82, valueFormatter: (p) => usd(p.value) },
-    { field: 'supplier', headerName: 'From', width: 66 },
-    { field: 'cost', headerName: 'Cost', width: 82, valueFormatter: (p) => usd(p.value) },
-    { headerName: 'Margin', width: 78, valueGetter: (p) => (p.data.cost ? ((p.data.sale_total - p.data.cost) / p.data.sale_total) * 100 : null), valueFormatter: (p) => (p.value == null ? '' : `${p.value.toFixed(0)}%`) },
-    { field: 'status', headerName: 'Status', flex: 1, minWidth: 100, cellRenderer: status },
+    { field: 'created_at', headerName: 'Time', width: 64, valueFormatter: (p) => new Date(p.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) },
+    { field: 'sku', headerName: 'Product', flex: 1, minWidth: 100, valueGetter: (p) => `${p.data.sku} ×${p.data.qty}` },
+    { field: 'sale_total', headerName: 'Sale', width: 88, valueFormatter: (p) => usd(p.value) },
+    { field: 'supplier', headerName: 'From', width: 64 },
+    { field: 'cost', headerName: 'Cost', width: 80, valueFormatter: (p) => usd(p.value) },
+    { headerName: 'Margin', width: 76, valueGetter: (p) => (p.data.cost ? ((p.data.sale_total - p.data.cost) / p.data.sale_total) * 100 : null), valueFormatter: (p) => (p.value == null ? '' : `${p.value.toFixed(0)}%`) },
+    { field: 'status', headerName: 'Status', width: 108, cellRenderer: status },
   ],
   onRowClicked: (e) => openOrder(e.data.id),
 });
@@ -128,26 +136,31 @@ async function openOrder(id) {
     ${last ? `<div class="explain">${esc(last.explanation || last.reason)}</div>` : '<p class="muted">The agent is working…</p>'}
     ${d.purchase ? `<p class="muted">Paid ${esc(d.purchase.supplier)} ${usd(d.purchase.amount)} by PayPal Payouts · batch ${esc(d.purchase.payout_batch_id || '')} (${esc(d.purchase.payout_status)}) · tracking ${esc(d.purchase.tracking || '-')}</p>` : ''}
     <h3 style="margin-top:14px">Offers compared</h3>
-    <div id="g-quotes" style="height:210px"></div>
+    <div id="g-quotes" style="height:200px"></div><p class="muted" id="q-note"></p>
     ${checks.length ? `<h3 style="margin-top:14px">Rule checks</h3><table class="checks">${checks.map((c) => `<tr><td>${c.pass ? '✅' : '⚠️'}</td><td>${esc(c.name)}</td><td>${esc(c.detail)}</td></tr>`).join('')}</table>` : ''}
     <ul class="timeline">${d.decisions.map((x) => `<li><b>${esc(x.action)}</b>${esc(x.reason)}</li>`).join('')}</ul>`;
+  const verdict = (r) => (!r ? '' : r.startsWith('CHOSEN') ? `✅ ${r.toLowerCase()}` : `✖ ${r}`);
+  const all = d.quotes.map((q) => ({ ...q, verdict: verdict(q.rejected_reason), by: ({ gtin: 'GTIN', ai: 'AI', heuristic: 'Text' })[(q.match || '').split(':')[0]] || '' }));
+  const rows = all.filter((q) => q.rejected_reason !== 'not the same product')
+    .sort((a, b) => (b.verdict.startsWith('✅') - a.verdict.startsWith('✅')) || a.landed - b.landed);
+  const others = all.length - rows.length;
+  $('q-note').textContent = others ? `${others} other supplier listing${others > 1 ? 's were' : ' was'} judged a different product and not considered.` : '';
   createGrid($('g-quotes'), {
-    theme, rowData: d.quotes,
+    theme, rowData: rows, tooltipShowDelay: 200,
     columnDefs: [
-      { field: 'rank', headerName: '#', width: 50 },
-      { field: 'supplier', headerName: 'From', width: 66 },
-      { field: 'item_name', headerName: 'Their listing', flex: 1, minWidth: 160, tooltipField: 'match' },
-      { field: 'landed', headerName: 'Landed', width: 82, valueFormatter: (p) => usd(p.value) },
-      { field: 'eta_days', headerName: 'Days', width: 60 },
-      { field: 'match', headerName: 'Same product?', width: 140, tooltipField: 'match' },
-      { field: 'rejected_reason', headerName: 'Not used because', width: 160, tooltipField: 'rejected_reason' },
+      { field: 'supplier', headerName: 'From', width: 62 },
+      { field: 'item_name', headerName: 'Their listing', flex: 1, minWidth: 120, tooltipValueGetter: (p) => `${p.data.item_name}\nMatch: ${p.data.match}` },
+      { field: 'by', headerName: 'Match', width: 96, tooltipField: 'match' },
+      { field: 'landed', headerName: 'Landed', width: 76, valueFormatter: (p) => usd(p.value) },
+      { field: 'eta_days', headerName: 'Days', width: 58 },
+      { field: 'verdict', headerName: 'Result', flex: 1.4, minWidth: 150, tooltipField: 'verdict' },
     ],
   });
 }
 
 // approvals grid
 const apGrid = createGrid($('g-approvals'), {
-  theme, getRowId: (p) => p.data.order_id,
+  theme, getRowId: (p) => p.data.order_id, autoSizeStrategy: { type: 'fitGridWidth' },
   columnDefs: [
     { field: 'created_at', headerName: 'Since', width: 100, valueFormatter: (p) => new Date(p.value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) },
     { field: 'sku', headerName: 'Product', width: 110 },
@@ -208,7 +221,15 @@ $('save').onclick = async () => {
 let proposed = null;
 $('preview').onclick = async () => {
   $('nl-out').textContent = 'Thinking…';
-  try { proposed = (await post('/api/policy/text', { text: $('nl').value })).proposed; $('nl-out').textContent = JSON.stringify(proposed, null, 2); $('apply').disabled = false; }
+  try {
+    proposed = (await post('/api/policy/text', { text: $('nl').value })).proposed;
+    const cur = await (await fetch('/api/policy')).json();
+    const names = { ...LABELS, blocked_suppliers: 'Blocked suppliers' };
+    const changes = Object.keys(names).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(proposed[k]))
+      .map((k) => `• ${names[k]}: ${JSON.stringify(cur[k])} → ${JSON.stringify(proposed[k])}`);
+    $('nl-out').textContent = changes.length ? `The AI proposes:\n${changes.join('\n')}\n\nNothing changes until you press Apply.` : 'No rule would change.';
+    $('apply').disabled = !changes.length;
+  }
   catch (e) { $('nl-out').textContent = e.message; }
 };
 $('apply').onclick = async () => {
